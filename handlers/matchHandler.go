@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"time"
 
 	"tic-tac-toe/api"
 	"tic-tac-toe/core"
@@ -62,27 +63,79 @@ func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 
 func (m *MatchHandler) MatchLeave(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presences []runtime.Presence) interface{} {
 	s := state.(*MatchState)
+
 	for _, p := range presences {
 		delete(s.Presences, p.GetUserId())
+
+		if s.Game != nil && s.Game.WinnerID == "" {
+			// Figure out who stayed
+			loserID := p.GetUserId()
+			if loserID == s.Game.Player1ID {
+				s.Game.WinnerID = s.Game.Player2ID
+			} else {
+				s.Game.WinnerID = s.Game.Player1ID
+			}
+
+			// Broadcast Forfeit
+			protoState := &api.GameState{
+				Board:         s.Game.Board,
+				CurrentTurn:   s.Game.CurrentTurn,
+				TurnStartTime: s.Game.TurnStartTime,
+				WinnerId:      s.Game.WinnerID,
+			}
+			outBytes, _ := proto.Marshal(protoState)
+			dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
+
+			// Update Trophies
+			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loserID)
+
+			return nil
+		}
 	}
-	// In a real game, you'd handle forfeit logic here
+
+	if len(s.Presences) == 0 {
+		return nil
+	}
 	return s
 }
-
 func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, messages []runtime.MatchData) interface{} {
 	s := state.(*MatchState)
 	if s.Game == nil {
-		return s // Waiting for players
+		return s
 	}
 
 	stateChanged := false
+	gameOver := false
+	isDraw := false
 
-	// Process incoming network messages
+	// 1. TIMER CHECK: Enforce the 30-second forfeit rule
+	now := time.Now().Unix()
+	if now-s.Game.TurnStartTime > 30 {
+		var loser string
+		if s.Game.CurrentTurn == 1 {
+			s.Game.WinnerID = s.Game.Player2ID
+			loser = s.Game.Player1ID
+		} else {
+			s.Game.WinnerID = s.Game.Player1ID
+			loser = s.Game.Player2ID
+		}
+		updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser)
+		stateChanged = true
+		gameOver = true
+	}
+
+	// 2. Process incoming network messages
 	for _, msg := range messages {
+		// --- NEW: Custom Ping Echo for the frontend ---
+		if msg.GetOpCode() == 4 {
+			// Bounce the exact same payload back to the sender
+			dispatcher.BroadcastMessage(4, msg.GetData(), []runtime.Presence{msg}, nil, true)
+			continue
+		}
+
 		if msg.GetOpCode() == int64(api.OpCode_OPCODE_MOVE) {
 			var moveReq api.MoveRequest
 			if err := proto.Unmarshal(msg.GetData(), &moveReq); err == nil {
-				// Pass the data to our isolated core logic
 				if s.Game.AttemptMove(msg.GetUserId(), moveReq.Position) {
 					stateChanged = true
 				}
@@ -90,26 +143,37 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 		}
 	}
 
-	// Check win condition
-	if stateChanged {
-		gameOver := s.Game.CheckWin()
+	// 3. Check for Win or Draw (if we haven't already forfeited)
+	if stateChanged && !gameOver {
+		gameOver = s.Game.CheckWin()
+		if !gameOver {
+			isDraw = s.Game.CheckDraw()
+			if isDraw {
+				gameOver = true
+			}
+		} else {
+			// Someone won via a legal move
+			loser := s.Game.Player1ID
+			if s.Game.WinnerID == s.Game.Player1ID {
+				loser = s.Game.Player2ID
+			}
+			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser)
+		}
+	}
 
-		// Map the core state back to our Protobuf network payload
+	// 4. Broadcast State and Handle End Game
+	if stateChanged {
 		protoState := &api.GameState{
 			Board:         s.Game.Board,
 			CurrentTurn:   s.Game.CurrentTurn,
 			TurnStartTime: s.Game.TurnStartTime,
 			WinnerId:      s.Game.WinnerID,
 		}
-
 		outBytes, _ := proto.Marshal(protoState)
-
-		// Broadcast to clients
 		dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
 
 		if gameOver {
-			logger.Info("Match won by %s", s.Game.WinnerID)
-			return nil // Returning nil ends the match loop and destroys the goroutine
+			return nil
 		}
 	}
 
@@ -122,4 +186,31 @@ func (m *MatchHandler) MatchTerminate(ctx context.Context, logger runtime.Logger
 
 func (m *MatchHandler) MatchSignal(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, data string) (interface{}, string) {
 	return state, ""
+}
+
+func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, winnerID string, loserID string) {
+	// 1. Handle Winner (+10)
+	var winnerScore int64 = 0
+	// Fetch current score
+	if records, _, _, _, err := nk.LeaderboardRecordsList(ctx, "global_trophies", []string{winnerID}, 1, "", 0); err == nil && len(records) > 0 {
+		winnerScore = records[0].Score
+	}
+	// Write new score
+	_, err := nk.LeaderboardRecordWrite(ctx, "global_trophies", winnerID, "", winnerScore+10, 0, nil, nil)
+	if err != nil {
+		logger.Error("Error writing winner trophies: %v", err)
+	}
+
+	// 2. Handle Loser (-2 if > 2)
+	var loserScore int64 = 0
+	if records, _, _, _, err := nk.LeaderboardRecordsList(ctx, "global_trophies", []string{loserID}, 1, "", 0); err == nil && len(records) > 0 {
+		loserScore = records[0].Score
+	}
+
+	if loserScore > 2 {
+		_, err = nk.LeaderboardRecordWrite(ctx, "global_trophies", loserID, "", loserScore-2, 0, nil, nil)
+		if err != nil {
+			logger.Error("Error writing loser trophies: %v", err)
+		}
+	}
 }

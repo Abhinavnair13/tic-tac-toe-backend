@@ -1,4 +1,4 @@
-version: "3"
+version: '3'
 services:
   postgres:
     container_name: postgres
@@ -8,9 +8,6 @@ services:
       - POSTGRES_PASSWORD=localdb
     volumes:
       - data:/var/lib/postgresql/data
-    expose:
-      - "8080"
-      - "5432"
     ports:
       - "5433:5432"
       - "8080:8080"
@@ -19,25 +16,20 @@ services:
       interval: 3s
       timeout: 3s
       retries: 5
+
   nakama:
     container_name: nakama
-    image: registry.heroiclabs.com/heroiclabs/nakama:3.22.0
+    build: .
     entrypoint:
       - "/bin/sh"
       - "-ecx"
       - >
         /nakama/nakama migrate up --database.address postgres:localdb@postgres:5432/nakama &&
-        exec /nakama/nakama --name nakama1 --database.address postgres:localdb@postgres:5432/nakama --logger.level DEBUG --session.token_expiry_sec 7200        
+        exec /nakama/nakama --name nakama1 --database.address postgres:localdb@postgres:5432/nakama --logger.level INFO --session.token_expiry_sec 7200        
     restart: always
-    links:
-      - "postgres:db"
     depends_on:
       postgres:
         condition: service_healthy
-    expose:
-      - "7349"
-      - "7350"
-      - "7351"
     ports:
       - "7349:7349"
       - "7350:7350"
@@ -47,5 +39,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
 volumes:
   data:

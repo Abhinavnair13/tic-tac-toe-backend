@@ -70,3 +70,13 @@ func (g *Game) CheckWin() bool {
 	}
 	return false
 }
+
+// CheckDraw returns true if there are no empty spaces left
+func (g *Game) CheckDraw() bool {
+	for _, cell := range g.Board {
+		if cell == 0 {
+			return false
+		}
+	}
+	return true
+}
