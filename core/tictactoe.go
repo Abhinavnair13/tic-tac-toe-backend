@@ -1,0 +1,72 @@
+package core
+
+import "time"
+
+// Game holds the raw state of the match
+type Game struct {
+	Board         []int32
+	CurrentTurn   int32 // 1 for Player X, 2 for Player O
+	TurnStartTime int64
+	WinnerID      string
+	Player1ID     string
+	Player2ID     string
+}
+
+// NewGame initializes a fresh board
+func NewGame(p1 string, p2 string) *Game {
+	return &Game{
+		Board:         make([]int32, 9),
+		CurrentTurn:   1,
+		TurnStartTime: time.Now().Unix(),
+		Player1ID:     p1,
+		Player2ID:     p2,
+	}
+}
+
+// AttemptMove validates and applies a move
+func (g *Game) AttemptMove(playerID string, position int32) bool {
+	// Validate bounds and empty cell
+	if position < 0 || position > 8 || g.Board[position] != 0 {
+		return false
+	}
+
+	// Validate turn
+	if (g.CurrentTurn == 1 && playerID != g.Player1ID) || (g.CurrentTurn == 2 && playerID != g.Player2ID) {
+		return false
+	}
+
+	// Apply move
+	g.Board[position] = g.CurrentTurn
+
+	// Reset timer and swap turns
+	g.TurnStartTime = time.Now().Unix()
+	if g.CurrentTurn == 1 {
+		g.CurrentTurn = 2
+	} else {
+		g.CurrentTurn = 1
+	}
+
+	return true
+}
+
+// CheckWin scans the board and updates the WinnerID if someone won
+func (g *Game) CheckWin() bool {
+	winningCombinations := [][]int32{
+		{0, 1, 2}, {3, 4, 5}, {6, 7, 8}, // Rows
+		{0, 3, 6}, {1, 4, 7}, {2, 5, 8}, // Cols
+		{0, 4, 8}, {2, 4, 6}, // Diagonals
+	}
+
+	for _, combo := range winningCombinations {
+		a, b, c := combo[0], combo[1], combo[2]
+		if g.Board[a] != 0 && g.Board[a] == g.Board[b] && g.Board[a] == g.Board[c] {
+			if g.Board[a] == 1 {
+				g.WinnerID = g.Player1ID
+			} else {
+				g.WinnerID = g.Player2ID
+			}
+			return true
+		}
+	}
+	return false
+}

@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package tictactoe;
+
+// Defines the import path for the generated Go code
+option go_package = "tic-tac-toe/api";
+
+// OpCodes act as the routing mechanism for our WebSocket messages.
+// Nakama expects an integer OpCode with every custom message.
+enum OpCode {
+    OPCODE_UNSPECIFIED = 0;
+    OPCODE_MOVE = 1;          // Client -> Server: "I want to place my mark"
+    OPCODE_STATE = 2;         // Server -> Client: "Here is the updated game state"
+    OPCODE_GAME_OVER = 3;     // Server -> Client: "The match has ended"
+}
+
+// The authoritative Game State broadcasted by the server tick loop
+message GameState {
+    // A 9-element array representing the 3x3 board.
+    // 0 = Empty, 1 = Player X, 2 = Player O
+    repeated int32 board = 1;     
+    
+    // Indicates whose turn it is currently (1 or 2)
+    int32 current_turn = 2;       
+    
+    // Unix timestamp indicating when the current turn started.
+    // Used by the server to enforce the 30-second forfeit rule.
+    int64 turn_start_time = 3;    
+    
+    // The Nakama User ID of the winner, or empty if ongoing/draw.
+    string winner_id = 4;            
+}
+
+// The payload sent by the client when making a move
+message MoveRequest {
+    // An integer from 0 to 8 representing the requested grid cell
+    int32 position = 1;           
+}
