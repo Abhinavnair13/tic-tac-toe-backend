@@ -1,6 +1,10 @@
 package core
 
-import "time"
+import (
+	"time"
+
+	runtime "github.com/heroiclabs/nakama-common/runtime" // Ensure this is imported
+)
 
 // Game holds the raw state of the match
 type Game struct {
@@ -24,14 +28,17 @@ func NewGame(p1 string, p2 string) *Game {
 }
 
 // AttemptMove validates and applies a move
-func (g *Game) AttemptMove(playerID string, position int32) bool {
+func (g *Game) AttemptMove(logger runtime.Logger, playerID string, position int32) bool {
 	// Validate bounds and empty cell
+	logger.Info("Attempting move - PlayerID: %s, Position: %d, CurrentTurn: %d", playerID, position, g.CurrentTurn)
 	if position < 0 || position > 8 || g.Board[position] != 0 {
+		logger.Info("Invalid move - Position out of bounds or cell already occupied")
 		return false
 	}
 
 	// Validate turn
 	if (g.CurrentTurn == 1 && playerID != g.Player1ID) || (g.CurrentTurn == 2 && playerID != g.Player2ID) {
+		logger.Info("Invalid move - Not current player's turn")
 		return false
 	}
 

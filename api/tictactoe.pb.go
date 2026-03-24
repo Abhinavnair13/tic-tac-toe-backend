@@ -88,6 +88,8 @@ type GameState struct {
 	TurnStartTime int64 `protobuf:"varint,3,opt,name=turn_start_time,json=turnStartTime,proto3" json:"turn_start_time,omitempty"`
 	// The Nakama User ID of the winner, or empty if ongoing/draw.
 	WinnerId      string `protobuf:"bytes,4,opt,name=winner_id,json=winnerId,proto3" json:"winner_id,omitempty"`
+	P1Id          string `protobuf:"bytes,5,opt,name=p1_id,json=p1Id,proto3" json:"p1_id,omitempty"` // NEW: Player 1 (X)
+	P2Id          string `protobuf:"bytes,6,opt,name=p2_id,json=p2Id,proto3" json:"p2_id,omitempty"` // NEW: Player 2 (O)
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -150,6 +152,20 @@ func (x *GameState) GetWinnerId() string {
 	return ""
 }
 
+func (x *GameState) GetP1Id() string {
+	if x != nil {
+		return x.P1Id
+	}
+	return ""
+}
+
+func (x *GameState) GetP2Id() string {
+	if x != nil {
+		return x.P2Id
+	}
+	return ""
+}
+
 // The payload sent by the client when making a move
 type MoveRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -200,12 +216,14 @@ var File_api_tictactoe_proto protoreflect.FileDescriptor
 
 const file_api_tictactoe_proto_rawDesc = "" +
 	"\n" +
-	"\x13api/tictactoe.proto\x12\ttictactoe\"\x89\x01\n" +
+	"\x13api/tictactoe.proto\x12\ttictactoe\"\xb3\x01\n" +
 	"\tGameState\x12\x14\n" +
 	"\x05board\x18\x01 \x03(\x05R\x05board\x12!\n" +
 	"\fcurrent_turn\x18\x02 \x01(\x05R\vcurrentTurn\x12&\n" +
 	"\x0fturn_start_time\x18\x03 \x01(\x03R\rturnStartTime\x12\x1b\n" +
-	"\twinner_id\x18\x04 \x01(\tR\bwinnerId\")\n" +
+	"\twinner_id\x18\x04 \x01(\tR\bwinnerId\x12\x13\n" +
+	"\x05p1_id\x18\x05 \x01(\tR\x04p1Id\x12\x13\n" +
+	"\x05p2_id\x18\x06 \x01(\tR\x04p2Id\")\n" +
 	"\vMoveRequest\x12\x1a\n" +
 	"\bposition\x18\x01 \x01(\x05R\bposition*Y\n" +
 	"\x06OpCode\x12\x16\n" +

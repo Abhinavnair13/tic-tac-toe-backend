@@ -28,7 +28,10 @@ message GameState {
     int64 turn_start_time = 3;    
     
     // The Nakama User ID of the winner, or empty if ongoing/draw.
-    string winner_id = 4;            
+    string winner_id = 4;         
+    
+    string p1_id = 5; // NEW: Player 1 (X)
+    string p2_id = 6; // NEW: Player 2 (O)
 }
 
 // The payload sent by the client when making a move
