@@ -3,6 +3,7 @@ package handlers
 import (
 	"context"
 	"database/sql"
+	"encoding/json"
 	"tic-tac-toe/api"
 	"tic-tac-toe/core"
 	"time"
@@ -17,15 +18,20 @@ type MatchState struct {
 	Game             *core.Game
 	Presences        map[string]runtime.Presence
 	InitialStateSent bool
+	Mode             string
 }
 
 func (m *MatchHandler) MatchInit(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, params map[string]interface{}) (interface{}, int, string) {
+	mode := "timed"
+	if params != nil && params["mode"] != nil {
+		mode = params["mode"].(string)
+	}
+
 	state := &MatchState{
 		Presences: make(map[string]runtime.Presence),
+		Mode:      mode,
 	}
-	tickRate := 10
-	label := "tictactoe"
-	return state, tickRate, label
+	return state, 10, "tictactoe"
 }
 
 func (m *MatchHandler) MatchJoinAttempt(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presence runtime.Presence, metadata map[string]string) (interface{}, bool, string) {
@@ -50,8 +56,13 @@ func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 				p2 = id
 			}
 		}
-		s.Game = core.NewGame(p1, p2)
-		logger.Info("Game Started between %s and %s", p1, p2)
+		isTimed := s.Mode == "timed"
+		s.Game = core.NewGame(p1, p2, isTimed)
+		if isTimed {
+			logger.Info("Game Started between %s and %s in Timed Mode", p1, p2)
+		} else {
+			logger.Info("Game Started between %s and %s in Classic Mode", p1, p2)
+		}
 	}
 	return s
 }
@@ -89,8 +100,8 @@ func (m *MatchHandler) MatchLeave(ctx context.Context, logger runtime.Logger, db
 			s.Game.WinnerID = winnerID
 
 			// Award +10 to winner, -2 to leaver
-			updateTrophies(ctx, logger, nk, winnerID, leaverID)
-
+			updateTrophies(ctx, logger, nk, winnerID, leaverID, s.Game.P1TimeUsed, s.Game.IsTimedMode)
+			updateMatchStats(ctx, logger, nk, winnerID, leaverID)
 			// Broadcast the game over state immediately
 			protoState := &api.GameState{
 				Board:         s.Game.Board,
@@ -179,12 +190,13 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 			if s.Game.WinnerID == s.Game.Player1ID {
 				loser = s.Game.Player2ID
 			}
-			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser)
+			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser, s.Game.P1TimeUsed, s.Game.IsTimedMode)
+			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, loser)
 		}
 	}
 
 	// 4. Timer check (30 second forfeit)
-	if !gameOver {
+	if !gameOver && s.Game.IsTimedMode {
 		now := time.Now().Unix()
 		if now-s.Game.TurnStartTime > 30 {
 			var loser string
@@ -195,7 +207,8 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 				s.Game.WinnerID = s.Game.Player1ID
 				loser = s.Game.Player2ID
 			}
-			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser)
+			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser, s.Game.P1TimeUsed, s.Game.IsTimedMode)
+			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, loser)
 			stateChanged = true
 			gameOver = true
 		}
@@ -210,6 +223,9 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 			WinnerId:      s.Game.WinnerID,
 			P1Id:          s.Game.Player1ID,
 			P2Id:          s.Game.Player2ID,
+			IsTimedMode:   s.Game.IsTimedMode,
+			P1TimeUsed:    s.Game.P1TimeUsed,
+			P2TimeUsed:    s.Game.P2TimeUsed,
 		}
 		outBytes, _ := proto.Marshal(protoState)
 		dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
@@ -230,44 +246,99 @@ func (m *MatchHandler) MatchSignal(ctx context.Context, logger runtime.Logger, d
 	return state, ""
 }
 
-func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, winnerID string, loserID string) {
-	// 1. UPDATE WINNER (+10)
+func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, winnerID string, loserID string, winnerTimeUsed int64, isTimedMode bool) { // 1. UPDATE WINNER (+10)
 	var winnerScore int64 = 0
-
-	// FIX: Use ownerRecords (the 2nd return value) to get this specific player's score
+	var winnerName string = ""
+	var trophiesToAward int64 = 10
+	if !isTimedMode {
+		if winnerTimeUsed <= 120 {
+			trophiesToAward = 10
+		} else if winnerTimeUsed <= 180 {
+			trophiesToAward = 9
+		} else if winnerTimeUsed <= 240 {
+			trophiesToAward = 8
+		} else {
+			trophiesToAward = 7
+		}
+	}
 	_, ownerRecords, _, _, err := nk.LeaderboardRecordsList(ctx, "global_trophies", []string{winnerID}, 1, "", 0)
 	if err == nil && len(ownerRecords) > 0 {
 		winnerScore = ownerRecords[0].Score
+		if ownerRecords[0].GetUsername() != nil {
+			winnerName = ownerRecords[0].GetUsername().GetValue()
+		}
 	}
-	logger.Warn("Winner score: %d", winnerScore)
 
-	_, err = nk.LeaderboardRecordWrite(ctx, "global_trophies", winnerID, "", winnerScore+10, 0, nil, nil)
+	_, err = nk.LeaderboardRecordWrite(ctx, "global_trophies", winnerID, winnerName, winnerScore+trophiesToAward, 0, nil, nil)
 	if err != nil {
 		logger.Error("Error writing winner trophies: %v", err)
 	}
 
 	// 2. UPDATE LOSER (-2)
 	var loserScore int64 = 0
+	var loserName string = ""
 
-	// FIX: Use ownerRecords here as well
 	_, loserOwnerRecords, _, _, err := nk.LeaderboardRecordsList(ctx, "global_trophies", []string{loserID}, 1, "", 0)
 	if err == nil && len(loserOwnerRecords) > 0 {
 		loserScore = loserOwnerRecords[0].Score
+		if loserOwnerRecords[0].GetUsername() != nil {
+			loserName = loserOwnerRecords[0].GetUsername().GetValue() // Grab the existing username!
+		}
 	}
-	logger.Warn("Loser score: %d", loserScore)
 
-	// Only apply penalty if they have trophies to lose
 	if loserScore > 2 {
-		newLoserScore := loserScore - 2
+		_, err = nk.LeaderboardRecordWrite(ctx, "global_trophies", loserID, loserName, loserScore-2, 0, nil, nil)
+	}
+}
 
-		// Prevent trophies from dropping below 0
-		if newLoserScore < 0 {
-			newLoserScore = 0
-		}
+type PlayerStats struct {
+	Wins   int `json:"wins"`
+	Losses int `json:"losses"`
+	Streak int `json:"streak"`
+}
 
-		_, err = nk.LeaderboardRecordWrite(ctx, "global_trophies", loserID, "", newLoserScore, 0, nil, nil)
-		if err != nil {
-			logger.Error("Error writing loser trophies: %v", err)
-		}
+func updateMatchStats(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, winnerID string, loserID string) {
+	updateSinglePlayerStat(ctx, logger, nk, winnerID, true)
+	if loserID != "" {
+		updateSinglePlayerStat(ctx, logger, nk, loserID, false)
+	}
+}
+
+func updateSinglePlayerStat(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string, isWinner bool) {
+	var stats PlayerStats
+
+	// 1. Read existing stats from Nakama Storage
+	records, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: "stats", Key: "profile", UserID: userID},
+	})
+
+	if err == nil && len(records) > 0 {
+		json.Unmarshal([]byte(records[0].Value), &stats)
+	}
+
+	// 2. Modify the stats
+	if isWinner {
+		stats.Wins++
+		stats.Streak++
+	} else {
+		stats.Losses++
+		stats.Streak = 0 // Reset streak on loss
+	}
+
+	// 3. Write them back (PermissionRead: 2 means public can view, PermissionWrite: 0 means clients CANNOT cheat/edit)
+	bytes, _ := json.Marshal(stats)
+	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      "stats",
+			Key:             "profile",
+			UserID:          userID,
+			Value:           string(bytes),
+			PermissionRead:  2,
+			PermissionWrite: 0,
+		},
+	})
+
+	if err != nil {
+		logger.Error("Failed to write stats for user %s: %v", userID, err)
 	}
 }

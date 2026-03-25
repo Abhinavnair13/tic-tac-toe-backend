@@ -90,6 +90,9 @@ type GameState struct {
 	WinnerId      string `protobuf:"bytes,4,opt,name=winner_id,json=winnerId,proto3" json:"winner_id,omitempty"`
 	P1Id          string `protobuf:"bytes,5,opt,name=p1_id,json=p1Id,proto3" json:"p1_id,omitempty"` // NEW: Player 1 (X)
 	P2Id          string `protobuf:"bytes,6,opt,name=p2_id,json=p2Id,proto3" json:"p2_id,omitempty"` // NEW: Player 2 (O)
+	IsTimedMode   bool   `protobuf:"varint,7,opt,name=is_timed_mode,json=isTimedMode,proto3" json:"is_timed_mode,omitempty"`
+	P1TimeUsed    int64  `protobuf:"varint,8,opt,name=p1_time_used,json=p1TimeUsed,proto3" json:"p1_time_used,omitempty"`
+	P2TimeUsed    int64  `protobuf:"varint,9,opt,name=p2_time_used,json=p2TimeUsed,proto3" json:"p2_time_used,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -166,6 +169,27 @@ func (x *GameState) GetP2Id() string {
 	return ""
 }
 
+func (x *GameState) GetIsTimedMode() bool {
+	if x != nil {
+		return x.IsTimedMode
+	}
+	return false
+}
+
+func (x *GameState) GetP1TimeUsed() int64 {
+	if x != nil {
+		return x.P1TimeUsed
+	}
+	return 0
+}
+
+func (x *GameState) GetP2TimeUsed() int64 {
+	if x != nil {
+		return x.P2TimeUsed
+	}
+	return 0
+}
+
 // The payload sent by the client when making a move
 type MoveRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -216,14 +240,19 @@ var File_api_tictactoe_proto protoreflect.FileDescriptor
 
 const file_api_tictactoe_proto_rawDesc = "" +
 	"\n" +
-	"\x13api/tictactoe.proto\x12\ttictactoe\"\xb3\x01\n" +
+	"\x13api/tictactoe.proto\x12\ttictactoe\"\x9b\x02\n" +
 	"\tGameState\x12\x14\n" +
 	"\x05board\x18\x01 \x03(\x05R\x05board\x12!\n" +
 	"\fcurrent_turn\x18\x02 \x01(\x05R\vcurrentTurn\x12&\n" +
 	"\x0fturn_start_time\x18\x03 \x01(\x03R\rturnStartTime\x12\x1b\n" +
 	"\twinner_id\x18\x04 \x01(\tR\bwinnerId\x12\x13\n" +
 	"\x05p1_id\x18\x05 \x01(\tR\x04p1Id\x12\x13\n" +
-	"\x05p2_id\x18\x06 \x01(\tR\x04p2Id\")\n" +
+	"\x05p2_id\x18\x06 \x01(\tR\x04p2Id\x12\"\n" +
+	"\ris_timed_mode\x18\a \x01(\bR\visTimedMode\x12 \n" +
+	"\fp1_time_used\x18\b \x01(\x03R\n" +
+	"p1TimeUsed\x12 \n" +
+	"\fp2_time_used\x18\t \x01(\x03R\n" +
+	"p2TimeUsed\")\n" +
 	"\vMoveRequest\x12\x1a\n" +
 	"\bposition\x18\x01 \x01(\x05R\bposition*Y\n" +
 	"\x06OpCode\x12\x16\n" +

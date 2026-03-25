@@ -14,16 +14,21 @@ type Game struct {
 	WinnerID      string
 	Player1ID     string
 	Player2ID     string
+
+	IsTimedMode bool
+	P1TimeUsed  int64
+	P2TimeUsed  int64
 }
 
 // NewGame initializes a fresh board
-func NewGame(p1 string, p2 string) *Game {
+func NewGame(p1 string, p2 string, isTimed bool) *Game {
 	return &Game{
 		Board:         make([]int32, 9),
 		CurrentTurn:   1,
 		TurnStartTime: time.Now().Unix(),
 		Player1ID:     p1,
 		Player2ID:     p2,
+		IsTimedMode:   isTimed,
 	}
 }
 
@@ -34,6 +39,12 @@ func (g *Game) AttemptMove(logger runtime.Logger, playerID string, position int3
 	if position < 0 || position > 8 || g.Board[position] != 0 {
 		logger.Info("Invalid move - Position out of bounds or cell already occupied")
 		return false
+	}
+	timeTaken := time.Now().Unix() - g.TurnStartTime
+	if g.CurrentTurn == 1 {
+		g.P1TimeUsed += timeTaken
+	} else {
+		g.P2TimeUsed += timeTaken
 	}
 
 	// Validate turn

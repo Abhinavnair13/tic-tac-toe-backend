@@ -32,6 +32,10 @@ message GameState {
     
     string p1_id = 5; // NEW: Player 1 (X)
     string p2_id = 6; // NEW: Player 2 (O)
+
+    bool is_timed_mode = 7;
+    int64 p1_time_used = 8;
+    int64 p2_time_used = 9;
 }
 
 // The payload sent by the client when making a move
