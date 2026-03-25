@@ -46,7 +46,20 @@ func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 	s := state.(*MatchState)
 	for _, p := range presences {
 		s.Presences[p.GetUserId()] = p
+
+		// If returning to an active game, clear the disconnect timer
+		if s.Game != nil {
+			if p.GetUserId() == s.Game.Player1ID {
+				s.Game.P1DisconnectTime = 0
+				logger.Info("Player 1 reconnected. Resuming match.")
+			} else if p.GetUserId() == s.Game.Player2ID {
+				s.Game.P2DisconnectTime = 0
+				logger.Info("Player 2 reconnected. Resuming match.")
+			}
+		}
 	}
+
+	// Start brand new game if it hasn't started
 	if len(s.Presences) == 2 && s.Game == nil {
 		var p1, p2 string
 		for id := range s.Presences {
@@ -64,59 +77,43 @@ func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 			logger.Info("Game Started between %s and %s in Classic Mode", p1, p2)
 		}
 	}
+
+	// Resync state to everyone (especially the rejoiner to hide the warning modal)
+	if s.Game != nil {
+		broadcastState(s, dispatcher)
+	}
+
 	return s
 }
 
 func (m *MatchHandler) MatchLeave(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presences []runtime.Presence) interface{} {
 	s := state.(*MatchState)
 
-	// If the game hasn't started or is already over, just clean up quietly
-	if s.Game == nil || s.Game.WinnerID != "" {
-		for _, p := range presences {
-			delete(s.Presences, p.GetUserId())
-		}
-		if len(s.Presences) == 0 {
-			return nil
-		}
-		return s
-	}
-
-	// A player forfeited during an active game!
 	for _, p := range presences {
 		leaverID := p.GetUserId()
 		delete(s.Presences, leaverID)
 
-		// Figure out who the winner is (the person who DID NOT leave)
-		var winnerID string
-		switch leaverID {
-		case s.Game.Player1ID:
-			winnerID = s.Game.Player2ID
-		case s.Game.Player2ID:
-			winnerID = s.Game.Player1ID
-		}
-
-		// Award trophies and broadcast the final state
-		if winnerID != "" {
-			s.Game.WinnerID = winnerID
-
-			// Award +10 to winner, -2 to leaver
-			updateTrophies(ctx, logger, nk, winnerID, leaverID, s.Game.P1TimeUsed, s.Game.IsTimedMode)
-			updateMatchStats(ctx, logger, nk, winnerID, leaverID)
-			// Broadcast the game over state immediately
-			protoState := &api.GameState{
-				Board:         s.Game.Board,
-				CurrentTurn:   s.Game.CurrentTurn,
-				TurnStartTime: s.Game.TurnStartTime,
-				WinnerId:      s.Game.WinnerID,
-				P1Id:          s.Game.Player1ID,
-				P2Id:          s.Game.Player2ID,
+		// If the game is active, DO NOT forfeit. Start the disconnect timer.
+		if s.Game != nil && s.Game.WinnerID == "" {
+			if leaverID == s.Game.Player1ID {
+				s.Game.P1DisconnectTime = time.Now().Unix()
+				logger.Info("Player 1 disconnected. Starting 15s grace period.")
+			} else if leaverID == s.Game.Player2ID {
+				s.Game.P2DisconnectTime = time.Now().Unix()
+				logger.Info("Player 2 disconnected. Starting 15s grace period.")
 			}
-			outBytes, _ := proto.Marshal(protoState)
-			dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
+
+			// Broadcast the state so the remaining player sees the modal
+			broadcastState(s, dispatcher)
 		}
 	}
 
-	return nil
+	// Only close the match instance if everyone is gone AND the game is actually over/empty
+	if len(s.Presences) == 0 && (s.Game == nil || s.Game.WinnerID != "") {
+		return nil
+	}
+
+	return s // Keep match alive in memory!
 }
 
 func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, messages []runtime.MatchData) interface{} {
@@ -132,57 +129,65 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 
 	// 1. Broadcast Initial State
 	if !s.InitialStateSent {
-		protoState := &api.GameState{
-			Board:         s.Game.Board,
-			CurrentTurn:   s.Game.CurrentTurn,
-			TurnStartTime: s.Game.TurnStartTime,
-			P1Id:          s.Game.Player1ID,
-			P2Id:          s.Game.Player2ID,
-			IsTimedMode:   s.Game.IsTimedMode,
-			P1TimeUsed:    s.Game.P1TimeUsed,
-			P2TimeUsed:    s.Game.P2TimeUsed,
-		}
-		outBytes, _ := proto.Marshal(protoState)
-		dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
+		broadcastState(s, dispatcher)
 		s.InitialStateSent = true
 	}
 
 	stateChanged := false
-	gameOver := false
+	gameOver := s.Game.WinnerID != ""
+	now := time.Now().Unix()
 
-	// 2. Process incoming messages
-	for _, msg := range messages {
-		opCode := msg.GetOpCode()
-
-		if opCode == 4 {
-			dispatcher.BroadcastMessage(4, msg.GetData(), []runtime.Presence{msg}, nil, true)
-			continue
+	// 2. CHECK GRACE PERIOD TIMEOUTS (15 seconds)
+	if !gameOver {
+		if s.Game.P1DisconnectTime > 0 && now-s.Game.P1DisconnectTime >= 15 {
+			s.Game.WinnerID = s.Game.Player2ID // P1 timed out
+			updateTrophies(ctx, logger, nk, s.Game.WinnerID, s.Game.Player1ID, s.Game.P2TimeUsed, s.Game.IsTimedMode)
+			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, s.Game.Player1ID)
+			gameOver = true
+			stateChanged = true
+			logger.Info("Player 1 forfeited by timeout.")
+		} else if s.Game.P2DisconnectTime > 0 && now-s.Game.P2DisconnectTime >= 15 {
+			s.Game.WinnerID = s.Game.Player1ID // P2 timed out
+			updateTrophies(ctx, logger, nk, s.Game.WinnerID, s.Game.Player2ID, s.Game.P1TimeUsed, s.Game.IsTimedMode)
+			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, s.Game.Player2ID)
+			gameOver = true
+			stateChanged = true
+			logger.Info("Player 2 forfeited by timeout.")
 		}
+	}
 
-		if opCode == 1 {
-			var moveReq api.MoveRequest
-			err := proto.Unmarshal(msg.GetData(), &moveReq)
-			if err != nil {
-				continue // Skip processing if it's garbage data
-			}
+	// 3. Process incoming messages (if game isn't over)
+	if !gameOver {
+		for _, msg := range messages {
+			opCode := msg.GetOpCode()
 
-			if s.Game == nil {
-				logger.Error("❌ FATAL: s.Game is nil when trying to move!")
+			if opCode == 4 { // Ping
+				dispatcher.BroadcastMessage(4, msg.GetData(), []runtime.Presence{msg}, nil, true)
 				continue
 			}
 
-			success := s.Game.AttemptMove(logger, msg.GetUserId(), moveReq.Position)
+			if opCode == 1 { // Move
+				var moveReq api.MoveRequest
+				err := proto.Unmarshal(msg.GetData(), &moveReq)
+				if err != nil {
+					continue
+				}
 
-			if success {
-				stateChanged = true
-			} else {
-				logger.Warn("⚠️ Move rejected by game logic.")
+				// Reject moves if the other player is currently disconnected
+				if s.Game.P1DisconnectTime > 0 || s.Game.P2DisconnectTime > 0 {
+					continue
+				}
+
+				success := s.Game.AttemptMove(logger, msg.GetUserId(), moveReq.Position)
+				if success {
+					stateChanged = true
+				}
 			}
 		}
 	}
 
-	// 3. Check win/draw
-	if stateChanged {
+	// 4. Check normal win/draw
+	if stateChanged && !gameOver {
 		gameOver = s.Game.CheckWin()
 		if !gameOver && s.Game.CheckDraw() {
 			gameOver = true
@@ -198,43 +203,32 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 		}
 	}
 
-	// 4. Timer check (30 second forfeit)
+	// 5. Timer check (30 second turn forfeit in Timed Mode)
 	if !gameOver && s.Game.IsTimedMode {
-		now := time.Now().Unix()
-		if now-s.Game.TurnStartTime > 30 {
-			var loser string
-			if s.Game.CurrentTurn == 1 {
-				s.Game.WinnerID = s.Game.Player2ID
-				loser = s.Game.Player1ID
-			} else {
-				s.Game.WinnerID = s.Game.Player1ID
-				loser = s.Game.Player2ID
+		// Only enforce turn timer if both players are connected!
+		if s.Game.P1DisconnectTime == 0 && s.Game.P2DisconnectTime == 0 {
+			if now-s.Game.TurnStartTime > 30 {
+				var loser string
+				if s.Game.CurrentTurn == 1 {
+					s.Game.WinnerID = s.Game.Player2ID
+					loser = s.Game.Player1ID
+				} else {
+					s.Game.WinnerID = s.Game.Player1ID
+					loser = s.Game.Player2ID
+				}
+				updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser, s.Game.P1TimeUsed, s.Game.IsTimedMode)
+				updateMatchStats(ctx, logger, nk, s.Game.WinnerID, loser)
+				stateChanged = true
+				gameOver = true
 			}
-			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser, s.Game.P1TimeUsed, s.Game.IsTimedMode)
-			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, loser)
-			stateChanged = true
-			gameOver = true
 		}
 	}
 
-	// 5. Broadcast state
+	// 6. Broadcast state
 	if stateChanged {
-		protoState := &api.GameState{
-			Board:         s.Game.Board,
-			CurrentTurn:   s.Game.CurrentTurn,
-			TurnStartTime: s.Game.TurnStartTime,
-			WinnerId:      s.Game.WinnerID,
-			P1Id:          s.Game.Player1ID,
-			P2Id:          s.Game.Player2ID,
-			IsTimedMode:   s.Game.IsTimedMode,
-			P1TimeUsed:    s.Game.P1TimeUsed,
-			P2TimeUsed:    s.Game.P2TimeUsed,
-		}
-		outBytes, _ := proto.Marshal(protoState)
-		dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
-
+		broadcastState(s, dispatcher)
 		if gameOver {
-			return nil
+			return nil // End the server match loop
 		}
 	}
 
@@ -344,4 +338,24 @@ func updateSinglePlayerStat(ctx context.Context, logger runtime.Logger, nk runti
 	if err != nil {
 		logger.Error("Failed to write stats for user %s: %v", userID, err)
 	}
+}
+func broadcastState(s *MatchState, dispatcher runtime.MatchDispatcher) {
+	if s.Game == nil {
+		return
+	}
+	protoState := &api.GameState{
+		Board:            s.Game.Board,
+		CurrentTurn:      s.Game.CurrentTurn,
+		TurnStartTime:    s.Game.TurnStartTime,
+		WinnerId:         s.Game.WinnerID,
+		P1Id:             s.Game.Player1ID,
+		P2Id:             s.Game.Player2ID,
+		IsTimedMode:      s.Game.IsTimedMode,
+		P1TimeUsed:       s.Game.P1TimeUsed,
+		P2TimeUsed:       s.Game.P2TimeUsed,
+		P1DisconnectTime: s.Game.P1DisconnectTime,
+		P2DisconnectTime: s.Game.P2DisconnectTime,
+	}
+	outBytes, _ := proto.Marshal(protoState)
+	dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
 }

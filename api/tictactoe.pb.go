@@ -87,14 +87,16 @@ type GameState struct {
 	// Used by the server to enforce the 30-second forfeit rule.
 	TurnStartTime int64 `protobuf:"varint,3,opt,name=turn_start_time,json=turnStartTime,proto3" json:"turn_start_time,omitempty"`
 	// The Nakama User ID of the winner, or empty if ongoing/draw.
-	WinnerId      string `protobuf:"bytes,4,opt,name=winner_id,json=winnerId,proto3" json:"winner_id,omitempty"`
-	P1Id          string `protobuf:"bytes,5,opt,name=p1_id,json=p1Id,proto3" json:"p1_id,omitempty"` // NEW: Player 1 (X)
-	P2Id          string `protobuf:"bytes,6,opt,name=p2_id,json=p2Id,proto3" json:"p2_id,omitempty"` // NEW: Player 2 (O)
-	IsTimedMode   bool   `protobuf:"varint,7,opt,name=is_timed_mode,json=isTimedMode,proto3" json:"is_timed_mode,omitempty"`
-	P1TimeUsed    int64  `protobuf:"varint,8,opt,name=p1_time_used,json=p1TimeUsed,proto3" json:"p1_time_used,omitempty"`
-	P2TimeUsed    int64  `protobuf:"varint,9,opt,name=p2_time_used,json=p2TimeUsed,proto3" json:"p2_time_used,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	WinnerId         string `protobuf:"bytes,4,opt,name=winner_id,json=winnerId,proto3" json:"winner_id,omitempty"`
+	P1Id             string `protobuf:"bytes,5,opt,name=p1_id,json=p1Id,proto3" json:"p1_id,omitempty"` // NEW: Player 1 (X)
+	P2Id             string `protobuf:"bytes,6,opt,name=p2_id,json=p2Id,proto3" json:"p2_id,omitempty"` // NEW: Player 2 (O)
+	IsTimedMode      bool   `protobuf:"varint,7,opt,name=is_timed_mode,json=isTimedMode,proto3" json:"is_timed_mode,omitempty"`
+	P1TimeUsed       int64  `protobuf:"varint,8,opt,name=p1_time_used,json=p1TimeUsed,proto3" json:"p1_time_used,omitempty"`
+	P2TimeUsed       int64  `protobuf:"varint,9,opt,name=p2_time_used,json=p2TimeUsed,proto3" json:"p2_time_used,omitempty"`
+	P1DisconnectTime int64  `protobuf:"varint,10,opt,name=p1_disconnect_time,json=p1DisconnectTime,proto3" json:"p1_disconnect_time,omitempty"` // Unix timestamp when P1 dropped (0 if connected)
+	P2DisconnectTime int64  `protobuf:"varint,11,opt,name=p2_disconnect_time,json=p2DisconnectTime,proto3" json:"p2_disconnect_time,omitempty"` // Unix timestamp when P2 dropped (0 if connected)
+	unknownFields    protoimpl.UnknownFields
+	sizeCache        protoimpl.SizeCache
 }
 
 func (x *GameState) Reset() {
@@ -190,6 +192,20 @@ func (x *GameState) GetP2TimeUsed() int64 {
 	return 0
 }
 
+func (x *GameState) GetP1DisconnectTime() int64 {
+	if x != nil {
+		return x.P1DisconnectTime
+	}
+	return 0
+}
+
+func (x *GameState) GetP2DisconnectTime() int64 {
+	if x != nil {
+		return x.P2DisconnectTime
+	}
+	return 0
+}
+
 // The payload sent by the client when making a move
 type MoveRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -240,7 +256,7 @@ var File_api_tictactoe_proto protoreflect.FileDescriptor
 
 const file_api_tictactoe_proto_rawDesc = "" +
 	"\n" +
-	"\x13api/tictactoe.proto\x12\ttictactoe\"\x9b\x02\n" +
+	"\x13api/tictactoe.proto\x12\ttictactoe\"\xf7\x02\n" +
 	"\tGameState\x12\x14\n" +
 	"\x05board\x18\x01 \x03(\x05R\x05board\x12!\n" +
 	"\fcurrent_turn\x18\x02 \x01(\x05R\vcurrentTurn\x12&\n" +
@@ -252,7 +268,10 @@ const file_api_tictactoe_proto_rawDesc = "" +
 	"\fp1_time_used\x18\b \x01(\x03R\n" +
 	"p1TimeUsed\x12 \n" +
 	"\fp2_time_used\x18\t \x01(\x03R\n" +
-	"p2TimeUsed\")\n" +
+	"p2TimeUsed\x12,\n" +
+	"\x12p1_disconnect_time\x18\n" +
+	" \x01(\x03R\x10p1DisconnectTime\x12,\n" +
+	"\x12p2_disconnect_time\x18\v \x01(\x03R\x10p2DisconnectTime\")\n" +
 	"\vMoveRequest\x12\x1a\n" +
 	"\bposition\x18\x01 \x01(\x05R\bposition*Y\n" +
 	"\x06OpCode\x12\x16\n" +

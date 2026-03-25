@@ -36,6 +36,9 @@ message GameState {
     bool is_timed_mode = 7;
     int64 p1_time_used = 8;
     int64 p2_time_used = 9;
+
+    int64 p1_disconnect_time = 10; // Unix timestamp when P1 dropped (0 if connected)
+    int64 p2_disconnect_time = 11; // Unix timestamp when P2 dropped (0 if connected)
 }
 
 // The payload sent by the client when making a move

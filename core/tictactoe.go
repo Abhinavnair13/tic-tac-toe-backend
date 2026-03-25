@@ -18,6 +18,9 @@ type Game struct {
 	IsTimedMode bool
 	P1TimeUsed  int64
 	P2TimeUsed  int64
+
+	P1DisconnectTime int64
+	P2DisconnectTime int64
 }
 
 // NewGame initializes a fresh board
