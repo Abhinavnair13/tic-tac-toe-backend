@@ -138,6 +138,9 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 			TurnStartTime: s.Game.TurnStartTime,
 			P1Id:          s.Game.Player1ID,
 			P2Id:          s.Game.Player2ID,
+			IsTimedMode:   s.Game.IsTimedMode,
+			P1TimeUsed:    s.Game.P1TimeUsed,
+			P2TimeUsed:    s.Game.P2TimeUsed,
 		}
 		outBytes, _ := proto.Marshal(protoState)
 		dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
