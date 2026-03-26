@@ -3,7 +3,7 @@ package core
 import (
 	"time"
 
-	runtime "github.com/heroiclabs/nakama-common/runtime" // Ensure this is imported
+	"github.com/heroiclabs/nakama-common/runtime"
 )
 
 // Game holds the raw state of the match
@@ -35,14 +35,53 @@ func NewGame(p1 string, p2 string, isTimed bool) *Game {
 	}
 }
 
+// Update runs every tick to check time-based rules (disconnects and turn limits)
+// Returns stateChanged, gameOver
+func (g *Game) Update(now int64) (bool, bool) {
+	if g.WinnerID != "" {
+		return false, true
+	}
+
+	// 1. Check Grace Period Timeouts (15 seconds)
+	if g.P1DisconnectTime > 0 && now-g.P1DisconnectTime >= 15 {
+		g.WinnerID = g.Player2ID // P1 timed out
+		return true, true
+	} else if g.P2DisconnectTime > 0 && now-g.P2DisconnectTime >= 15 {
+		g.WinnerID = g.Player1ID // P2 timed out
+		return true, true
+	}
+
+	// 2. Check Turn Timer (30s) in Timed Mode
+	// Only enforce turn timer if both players are actively connected
+	if g.IsTimedMode && g.P1DisconnectTime == 0 && g.P2DisconnectTime == 0 {
+		if now-g.TurnStartTime > 30 {
+			if g.CurrentTurn == 1 {
+				g.WinnerID = g.Player2ID
+			} else {
+				g.WinnerID = g.Player1ID
+			}
+			return true, true
+		}
+	}
+
+	return false, false
+}
+
 // AttemptMove validates and applies a move
 func (g *Game) AttemptMove(logger runtime.Logger, playerID string, position int32) bool {
-	// Validate bounds and empty cell
 	logger.Info("Attempting move - PlayerID: %s, Position: %d, CurrentTurn: %d", playerID, position, g.CurrentTurn)
+
+	// Reject if game is paused due to a disconnect
+	if g.P1DisconnectTime > 0 || g.P2DisconnectTime > 0 {
+		logger.Info("Invalid move - Waiting for opponent to reconnect")
+		return false
+	}
+
 	if position < 0 || position > 8 || g.Board[position] != 0 {
 		logger.Info("Invalid move - Position out of bounds or cell already occupied")
 		return false
 	}
+
 	timeTaken := time.Now().Unix() - g.TurnStartTime
 	if g.CurrentTurn == 1 {
 		g.P1TimeUsed += timeTaken
@@ -50,17 +89,14 @@ func (g *Game) AttemptMove(logger runtime.Logger, playerID string, position int3
 		g.P2TimeUsed += timeTaken
 	}
 
-	// Validate turn
 	if (g.CurrentTurn == 1 && playerID != g.Player1ID) || (g.CurrentTurn == 2 && playerID != g.Player2ID) {
 		logger.Info("Invalid move - Not current player's turn")
 		return false
 	}
 
-	// Apply move
 	g.Board[position] = g.CurrentTurn
-
-	// Reset timer and swap turns
 	g.TurnStartTime = time.Now().Unix()
+
 	if g.CurrentTurn == 1 {
 		g.CurrentTurn = 2
 	} else {
@@ -68,6 +104,22 @@ func (g *Game) AttemptMove(logger runtime.Logger, playerID string, position int3
 	}
 
 	return true
+}
+
+func (g *Game) PlayerDisconnected(playerID string, now int64) {
+	if playerID == g.Player1ID {
+		g.P1DisconnectTime = now
+	} else if playerID == g.Player2ID {
+		g.P2DisconnectTime = now
+	}
+}
+
+func (g *Game) PlayerReconnected(playerID string) {
+	if playerID == g.Player1ID {
+		g.P1DisconnectTime = 0
+	} else if playerID == g.Player2ID {
+		g.P2DisconnectTime = 0
+	}
 }
 
 // CheckWin scans the board and updates the WinnerID if someone won
@@ -100,4 +152,21 @@ func (g *Game) CheckDraw() bool {
 		}
 	}
 	return true
+}
+
+// Utility functions to help the Handler process rewards
+func (g *Game) GetLoserID() string {
+	if g.WinnerID == g.Player1ID {
+		return g.Player2ID
+	} else if g.WinnerID == g.Player2ID {
+		return g.Player1ID
+	}
+	return ""
+}
+
+func (g *Game) GetWinnerTimeUsed() int64 {
+	if g.WinnerID == g.Player1ID {
+		return g.P1TimeUsed
+	}
+	return g.P2TimeUsed
 }

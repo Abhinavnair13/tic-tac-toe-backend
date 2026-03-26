@@ -34,32 +34,17 @@ func (m *MatchHandler) MatchInit(ctx context.Context, logger runtime.Logger, db 
 	return state, 10, "tictactoe"
 }
 
-func (m *MatchHandler) MatchJoinAttempt(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presence runtime.Presence, metadata map[string]string) (interface{}, bool, string) {
-	s := state.(*MatchState)
-	if len(s.Presences) >= 2 {
-		return s, false, "Match is full"
-	}
-	return s, true, ""
-}
-
 func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presences []runtime.Presence) interface{} {
 	s := state.(*MatchState)
 	for _, p := range presences {
 		s.Presences[p.GetUserId()] = p
 
-		// If returning to an active game, clear the disconnect timer
 		if s.Game != nil {
-			if p.GetUserId() == s.Game.Player1ID {
-				s.Game.P1DisconnectTime = 0
-				logger.Info("Player 1 reconnected. Resuming match.")
-			} else if p.GetUserId() == s.Game.Player2ID {
-				s.Game.P2DisconnectTime = 0
-				logger.Info("Player 2 reconnected. Resuming match.")
-			}
+			s.Game.PlayerReconnected(p.GetUserId())
+			logger.Info("Player %s reconnected. Resuming match.", p.GetUserId())
 		}
 	}
 
-	// Start brand new game if it hasn't started
 	if len(s.Presences) == 2 && s.Game == nil {
 		var p1, p2 string
 		for id := range s.Presences {
@@ -72,7 +57,6 @@ func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 		isTimed := s.Mode == "timed"
 		s.Game = core.NewGame(p1, p2, isTimed)
 
-		// NEW: Save the active match across all devices for both players!
 		matchID := ctx.Value(runtime.RUNTIME_CTX_MATCH_ID).(string)
 		setActiveMatch(ctx, logger, nk, p1, matchID)
 		setActiveMatch(ctx, logger, nk, p2, matchID)
@@ -99,27 +83,18 @@ func (m *MatchHandler) MatchLeave(ctx context.Context, logger runtime.Logger, db
 		leaverID := p.GetUserId()
 		delete(s.Presences, leaverID)
 
-		// If the game is active, DO NOT forfeit. Start the disconnect timer.
 		if s.Game != nil && s.Game.WinnerID == "" {
-			if leaverID == s.Game.Player1ID {
-				s.Game.P1DisconnectTime = time.Now().Unix()
-				logger.Info("Player 1 disconnected. Starting 15s grace period.")
-			} else if leaverID == s.Game.Player2ID {
-				s.Game.P2DisconnectTime = time.Now().Unix()
-				logger.Info("Player 2 disconnected. Starting 15s grace period.")
-			}
-
-			// Broadcast the state so the remaining player sees the modal
+			s.Game.PlayerDisconnected(leaverID, time.Now().Unix())
+			logger.Info("Player %s disconnected. Grace period logic delegated to core.", leaverID)
 			broadcastState(s, dispatcher)
 		}
 	}
 
-	// Only close the match instance if everyone is gone AND the game is actually over/empty
 	if len(s.Presences) == 0 && (s.Game == nil || s.Game.WinnerID != "") {
 		return nil
 	}
 
-	return s // Keep match alive in memory!
+	return s
 }
 
 func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, messages []runtime.MatchData) interface{} {
@@ -133,36 +108,17 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 		}
 	}()
 
-	// 1. Broadcast Initial State
 	if !s.InitialStateSent {
 		broadcastState(s, dispatcher)
 		s.InitialStateSent = true
 	}
 
-	stateChanged := false
-	gameOver := s.Game.WinnerID != ""
 	now := time.Now().Unix()
 
-	// 2. CHECK GRACE PERIOD TIMEOUTS (15 seconds)
-	if !gameOver {
-		if s.Game.P1DisconnectTime > 0 && now-s.Game.P1DisconnectTime >= 15 {
-			s.Game.WinnerID = s.Game.Player2ID // P1 timed out
-			updateTrophies(ctx, logger, nk, s.Game.WinnerID, s.Game.Player1ID, s.Game.P2TimeUsed, s.Game.IsTimedMode)
-			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, s.Game.Player1ID)
-			gameOver = true
-			stateChanged = true
-			logger.Info("Player 1 forfeited by timeout.")
-		} else if s.Game.P2DisconnectTime > 0 && now-s.Game.P2DisconnectTime >= 15 {
-			s.Game.WinnerID = s.Game.Player1ID // P2 timed out
-			updateTrophies(ctx, logger, nk, s.Game.WinnerID, s.Game.Player2ID, s.Game.P1TimeUsed, s.Game.IsTimedMode)
-			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, s.Game.Player2ID)
-			gameOver = true
-			stateChanged = true
-			logger.Info("Player 2 forfeited by timeout.")
-		}
-	}
+	// 1. Let the Core Game handle time-based logic (timeouts, disconnects)
+	stateChanged, gameOver := s.Game.Update(now)
 
-	// 3. Process incoming messages (if game isn't over)
+	// 2. Process incoming messages
 	if !gameOver {
 		for _, msg := range messages {
 			opCode := msg.GetOpCode()
@@ -174,74 +130,48 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 
 			if opCode == 1 { // Move
 				var moveReq api.MoveRequest
-				err := proto.Unmarshal(msg.GetData(), &moveReq)
-				if err != nil {
+				if err := proto.Unmarshal(msg.GetData(), &moveReq); err != nil {
 					continue
 				}
 
-				// Reject moves if the other player is currently disconnected
-				if s.Game.P1DisconnectTime > 0 || s.Game.P2DisconnectTime > 0 {
-					continue
-				}
-
-				success := s.Game.AttemptMove(logger, msg.GetUserId(), moveReq.Position)
-				if success {
+				if s.Game.AttemptMove(logger, msg.GetUserId(), moveReq.Position) {
 					stateChanged = true
+
+					// 3. Check for standard Win/Draw after a move
+					if s.Game.CheckWin() || s.Game.CheckDraw() {
+						gameOver = true
+					}
 				}
 			}
 		}
 	}
 
-	// 4. Check normal win/draw
-	if stateChanged && !gameOver {
-		gameOver = s.Game.CheckWin()
-		if !gameOver && s.Game.CheckDraw() {
-			gameOver = true
-		}
-
-		if gameOver && s.Game.WinnerID != "" {
-			loser := s.Game.Player1ID
-			if s.Game.WinnerID == s.Game.Player1ID {
-				loser = s.Game.Player2ID
-			}
-			updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser, s.Game.P1TimeUsed, s.Game.IsTimedMode)
-			updateMatchStats(ctx, logger, nk, s.Game.WinnerID, loser)
-		}
-	}
-
-	// 5. Timer check (30 second turn forfeit in Timed Mode)
-	if !gameOver && s.Game.IsTimedMode {
-		// Only enforce turn timer if both players are connected!
-		if s.Game.P1DisconnectTime == 0 && s.Game.P2DisconnectTime == 0 {
-			if now-s.Game.TurnStartTime > 30 {
-				var loser string
-				if s.Game.CurrentTurn == 1 {
-					s.Game.WinnerID = s.Game.Player2ID
-					loser = s.Game.Player1ID
-				} else {
-					s.Game.WinnerID = s.Game.Player1ID
-					loser = s.Game.Player2ID
-				}
-				updateTrophies(ctx, logger, nk, s.Game.WinnerID, loser, s.Game.P1TimeUsed, s.Game.IsTimedMode)
-				updateMatchStats(ctx, logger, nk, s.Game.WinnerID, loser)
-				stateChanged = true
-				gameOver = true
-			}
-		}
-	}
-
-	// 6. Broadcast state
+	// 4. Handle Rewards & Terminate if game ended
 	if stateChanged {
 		broadcastState(s, dispatcher)
+
 		if gameOver {
-			// NEW: Clear the active match from storage so they don't auto-rejoin a finished game
+			if s.Game.WinnerID != "" {
+				loserID := s.Game.GetLoserID()
+				winnerTime := s.Game.GetWinnerTimeUsed()
+				updateTrophies(ctx, logger, nk, s.Game.WinnerID, loserID, winnerTime, s.Game.IsTimedMode)
+				updateMatchStats(ctx, logger, nk, s.Game.WinnerID, loserID)
+			}
+
 			clearActiveMatch(ctx, logger, nk, s.Game.Player1ID)
 			clearActiveMatch(ctx, logger, nk, s.Game.Player2ID)
-			return nil // End the server match loop
+			return nil // End the server match loop gracefully
 		}
 	}
 
 	return s
+}
+func (m *MatchHandler) MatchJoinAttempt(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, presence runtime.Presence, metadata map[string]string) (interface{}, bool, string) {
+	s := state.(*MatchState)
+	if len(s.Presences) >= 2 {
+		return s, false, "Match is full"
+	}
+	return s, true, ""
 }
 
 func (m *MatchHandler) MatchTerminate(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, dispatcher runtime.MatchDispatcher, tick int64, state interface{}, graceSeconds int) interface{} {
@@ -256,12 +186,13 @@ func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 	var winnerScore int64 = 0
 	var winnerName string = ""
 	var trophiesToAward int64 = 10
+	logger.Info("Winner time used %d", winnerTimeUsed)
 	if !isTimedMode {
-		if winnerTimeUsed <= 120 {
+		if winnerTimeUsed <= 60 {
 			trophiesToAward = 10
-		} else if winnerTimeUsed <= 180 {
+		} else if winnerTimeUsed <= 90 {
 			trophiesToAward = 9
-		} else if winnerTimeUsed <= 240 {
+		} else if winnerTimeUsed <= 120 {
 			trophiesToAward = 8
 		} else {
 			trophiesToAward = 7

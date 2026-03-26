@@ -19,7 +19,11 @@ services:
 
   nakama:
     container_name: nakama
-    build: .
+    build: 
+      context: .
+      tags:
+        - nakama/tic-tac-toe-backend
+    image: nakama/tic-tac-toe-backend:latest
     entrypoint:
       - "/bin/sh"
       - "-ecx"
