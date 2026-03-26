@@ -25,7 +25,7 @@ services:
       - "-ecx"
       - >
         /nakama/nakama migrate up --database.address postgres:localdb@postgres:5432/nakama &&
-        exec /nakama/nakama --name nakama1 --database.address postgres:localdb@postgres:5432/nakama --logger.level INFO --session.token_expiry_sec 7200        
+        exec /nakama/nakama --name nakama1 --database.address postgres:localdb@postgres:5432/nakama --logger.level INFO --session.token_expiry_sec 7200 --session.single_socket true     
     restart: always
     depends_on:
       postgres:

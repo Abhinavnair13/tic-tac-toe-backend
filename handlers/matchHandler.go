@@ -71,6 +71,12 @@ func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 		}
 		isTimed := s.Mode == "timed"
 		s.Game = core.NewGame(p1, p2, isTimed)
+
+		// NEW: Save the active match across all devices for both players!
+		matchID := ctx.Value(runtime.RUNTIME_CTX_MATCH_ID).(string)
+		setActiveMatch(ctx, logger, nk, p1, matchID)
+		setActiveMatch(ctx, logger, nk, p2, matchID)
+
 		if isTimed {
 			logger.Info("Game Started between %s and %s in Timed Mode", p1, p2)
 		} else {
@@ -228,6 +234,9 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 	if stateChanged {
 		broadcastState(s, dispatcher)
 		if gameOver {
+			// NEW: Clear the active match from storage so they don't auto-rejoin a finished game
+			clearActiveMatch(ctx, logger, nk, s.Game.Player1ID)
+			clearActiveMatch(ctx, logger, nk, s.Game.Player2ID)
 			return nil // End the server match loop
 		}
 	}
@@ -358,4 +367,26 @@ func broadcastState(s *MatchState, dispatcher runtime.MatchDispatcher) {
 	}
 	outBytes, _ := proto.Marshal(protoState)
 	dispatcher.BroadcastMessage(int64(api.OpCode_OPCODE_STATE), outBytes, nil, nil, true)
+}
+
+func setActiveMatch(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID, matchID string) {
+	bytes, _ := json.Marshal(map[string]string{"match_id": matchID})
+	nk.StorageWrite(ctx, []*runtime.StorageWrite{{
+		Collection:      "system",
+		Key:             "active_match",
+		UserID:          userID,
+		Value:           string(bytes),
+		PermissionRead:  1, // 1 = Owner can read it (Frontend), 0 = Nobody can edit it
+		PermissionWrite: 0,
+	}})
+	logger.Info("Active match set for user: %s with matchId: %s", userID, matchID)
+}
+
+func clearActiveMatch(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string) {
+	nk.StorageDelete(ctx, []*runtime.StorageDelete{{
+		Collection: "system",
+		Key:        "active_match",
+		UserID:     userID,
+	}})
+	logger.Info("Active match cleared for user: %s with matchId :%s", userID)
 }

@@ -29,6 +29,11 @@ func (h *GameHandlers) AfterAuthenticateEmailHook(ctx context.Context, logger ru
 
 // MatchmakerMatchedHook is now a method of GameHandlers
 func (h *GameHandlers) MatchmakerMatchedHook(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, entries []runtime.MatchmakerEntry) (string, error) {
+	if len(entries) == 2 && entries[0].GetPresence().GetUserId() == entries[1].GetPresence().GetUserId() {
+		logger.Warn("Prevented user %s from matchmaking against themselves.", entries[0].GetPresence().GetUserId())
+		return "", runtime.NewError("Cannot play against yourself", 3) // 3 = INVALID_ARGUMENT
+	}
+
 	logger.Info("Matchmaker found 2 players! Spawning Authoritative Match...")
 
 	mode := "timed"
