@@ -12,6 +12,11 @@ COPY . .
 # Resolve dependencies
 RUN go mod tidy
 
+# --- NEW: The "Test Before Build" Gatekeeper ---
+# Docker will run all your Go tests here. If any fail, the build stops.
+RUN go test ./...
+# ----------------------------------------------
+
 # Compile the plugin with trimpath for extra safety
 RUN go build --buildmode=plugin -trimpath -o ./backend.so
 

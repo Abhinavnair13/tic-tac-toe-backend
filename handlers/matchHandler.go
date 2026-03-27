@@ -186,7 +186,7 @@ func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 	var winnerScore int64 = 0
 	var winnerName string = ""
 	var trophiesToAward int64 = 10
-	logger.Info("Winner time used %d", winnerTimeUsed)
+	logger.Info("Winner total time used %d", winnerTimeUsed)
 	if !isTimedMode {
 		if winnerTimeUsed <= 60 {
 			trophiesToAward = 10

@@ -10,7 +10,12 @@ services:
       - data:/var/lib/postgresql/data
     ports:
       - "5433:5432"
-      - "8080:8080"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.50'
+          memory: 512M
+          
     healthcheck:
       test: ["CMD", "pg_isready", "-U", "postgres", "-d", "nakama"]
       interval: 3s
@@ -38,6 +43,17 @@ services:
       - "7349:7349"
       - "7350:7350"
       - "7351:7351"
+    logging:
+      driver: awslogs
+      options:
+        awslogs-region: "ap-south-1" 
+        awslogs-group: "nakama-production-logs"
+        awslogs-create-group: "true"
+    deploy:
+      resources:
+        limits:
+          cpus: '0.80'     
+          memory: 512M     
     healthcheck:
       test: ["CMD", "/nakama/nakama", "healthcheck"]
       interval: 10s
