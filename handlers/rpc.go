@@ -23,7 +23,6 @@ type CombinedLeaderboardRecord struct {
 	Stats    DBStats `json:"stats"`
 }
 
-// GetLeaderboardWithStatsRPC is now a method of GameHandlers
 func (h *GameHandlers) GetLeaderboardWithStatsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	records, _, _, _, err := nk.LeaderboardRecordsList(ctx, "global_trophies", []string{}, 50, "", 0)
 	if err != nil {

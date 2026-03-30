@@ -6,10 +6,9 @@ import (
 	"github.com/heroiclabs/nakama-common/runtime"
 )
 
-// Game holds the raw state of the match
 type Game struct {
 	Board         []int32
-	CurrentTurn   int32 // 1 for Player X, 2 for Player O
+	CurrentTurn   int32
 	TurnStartTime int64
 	WinnerID      string
 	Player1ID     string
@@ -23,7 +22,6 @@ type Game struct {
 	P2DisconnectTime int64
 }
 
-// NewGame initializes a fresh board
 func NewGame(p1 string, p2 string, isTimed bool) *Game {
 	return &Game{
 		Board:         make([]int32, 9),
@@ -35,24 +33,19 @@ func NewGame(p1 string, p2 string, isTimed bool) *Game {
 	}
 }
 
-// Update runs every tick to check time-based rules (disconnects and turn limits)
-// Returns stateChanged, gameOver
 func (g *Game) Update(now int64) (bool, bool) {
 	if g.WinnerID != "" {
 		return false, true
 	}
 
-	// 1. Check Grace Period Timeouts (15 seconds)
 	if g.P1DisconnectTime > 0 && now-g.P1DisconnectTime >= 15 {
-		g.WinnerID = g.Player2ID // P1 timed out
+		g.WinnerID = g.Player2ID
 		return true, true
 	} else if g.P2DisconnectTime > 0 && now-g.P2DisconnectTime >= 15 {
-		g.WinnerID = g.Player1ID // P2 timed out
+		g.WinnerID = g.Player1ID
 		return true, true
 	}
 
-	// 2. Check Turn Timer (30s) in Timed Mode
-	// Only enforce turn timer if both players are actively connected
 	if g.IsTimedMode && g.P1DisconnectTime == 0 && g.P2DisconnectTime == 0 {
 		if now-g.TurnStartTime > 30 {
 			if g.CurrentTurn == 1 {
@@ -67,11 +60,9 @@ func (g *Game) Update(now int64) (bool, bool) {
 	return false, false
 }
 
-// AttemptMove validates and applies a move
 func (g *Game) AttemptMove(logger runtime.Logger, playerID string, position int32) bool {
 	logger.Info("Attempting move - PlayerID: %s, Position: %d, CurrentTurn: %d", playerID, position, g.CurrentTurn)
 
-	// Reject if game is paused due to a disconnect
 	if g.P1DisconnectTime > 0 || g.P2DisconnectTime > 0 {
 		logger.Info("Invalid move - Waiting for opponent to reconnect")
 		return false
@@ -122,12 +113,11 @@ func (g *Game) PlayerReconnected(playerID string) {
 	}
 }
 
-// CheckWin scans the board and updates the WinnerID if someone won
 func (g *Game) CheckWin() bool {
 	winningCombinations := [][]int32{
-		{0, 1, 2}, {3, 4, 5}, {6, 7, 8}, // Rows
-		{0, 3, 6}, {1, 4, 7}, {2, 5, 8}, // Cols
-		{0, 4, 8}, {2, 4, 6}, // Diagonals
+		{0, 1, 2}, {3, 4, 5}, {6, 7, 8},
+		{0, 3, 6}, {1, 4, 7}, {2, 5, 8},
+		{0, 4, 8}, {2, 4, 6},
 	}
 
 	for _, combo := range winningCombinations {
@@ -144,7 +134,6 @@ func (g *Game) CheckWin() bool {
 	return false
 }
 
-// CheckDraw returns true if there are no empty spaces left
 func (g *Game) CheckDraw() bool {
 	for _, cell := range g.Board {
 		if cell == 0 {
@@ -154,7 +143,6 @@ func (g *Game) CheckDraw() bool {
 	return true
 }
 
-// Utility functions to help the Handler process rewards
 func (g *Game) GetLoserID() string {
 	if g.WinnerID == g.Player1ID {
 		return g.Player2ID

@@ -68,7 +68,6 @@ func (m *MatchHandler) MatchJoin(ctx context.Context, logger runtime.Logger, db 
 		}
 	}
 
-	// Resync state to everyone (especially the rejoiner to hide the warning modal)
 	if s.Game != nil {
 		broadcastState(s, dispatcher)
 	}
@@ -115,20 +114,18 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 
 	now := time.Now().Unix()
 
-	// 1. Let the Core Game handle time-based logic (timeouts, disconnects)
 	stateChanged, gameOver := s.Game.Update(now)
 
-	// 2. Process incoming messages
 	if !gameOver {
 		for _, msg := range messages {
 			opCode := msg.GetOpCode()
 
-			if opCode == 4 { // Ping
+			if opCode == 4 {
 				dispatcher.BroadcastMessage(4, msg.GetData(), []runtime.Presence{msg}, nil, true)
 				continue
 			}
 
-			if opCode == 1 { // Move
+			if opCode == 1 {
 				var moveReq api.MoveRequest
 				if err := proto.Unmarshal(msg.GetData(), &moveReq); err != nil {
 					continue
@@ -137,7 +134,6 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 				if s.Game.AttemptMove(logger, msg.GetUserId(), moveReq.Position) {
 					stateChanged = true
 
-					// 3. Check for standard Win/Draw after a move
 					if s.Game.CheckWin() || s.Game.CheckDraw() {
 						gameOver = true
 					}
@@ -146,7 +142,6 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 		}
 	}
 
-	// 4. Handle Rewards & Terminate if game ended
 	if stateChanged {
 		broadcastState(s, dispatcher)
 
@@ -160,7 +155,7 @@ func (m *MatchHandler) MatchLoop(ctx context.Context, logger runtime.Logger, db 
 
 			clearActiveMatch(ctx, logger, nk, s.Game.Player1ID)
 			clearActiveMatch(ctx, logger, nk, s.Game.Player2ID)
-			return nil // End the server match loop gracefully
+			return nil
 		}
 	}
 
@@ -182,7 +177,7 @@ func (m *MatchHandler) MatchSignal(ctx context.Context, logger runtime.Logger, d
 	return state, ""
 }
 
-func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, winnerID string, loserID string, winnerTimeUsed int64, isTimedMode bool) { // 1. UPDATE WINNER (+10)
+func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, winnerID string, loserID string, winnerTimeUsed int64, isTimedMode bool) {
 	var winnerScore int64 = 0
 	var winnerName string = ""
 	var trophiesToAward int64 = 10
@@ -211,7 +206,6 @@ func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 		logger.Error("Error writing winner trophies: %v", err)
 	}
 
-	// 2. UPDATE LOSER (-2)
 	var loserScore int64 = 0
 	var loserName string = ""
 
@@ -219,7 +213,7 @@ func updateTrophies(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 	if err == nil && len(loserOwnerRecords) > 0 {
 		loserScore = loserOwnerRecords[0].Score
 		if loserOwnerRecords[0].GetUsername() != nil {
-			loserName = loserOwnerRecords[0].GetUsername().GetValue() // Grab the existing username!
+			loserName = loserOwnerRecords[0].GetUsername().GetValue()
 		}
 	}
 
@@ -244,7 +238,6 @@ func updateMatchStats(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 func updateSinglePlayerStat(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string, isWinner bool) {
 	var stats PlayerStats
 
-	// 1. Read existing stats from Nakama Storage
 	records, err := nk.StorageRead(ctx, []*runtime.StorageRead{
 		{Collection: "stats", Key: "profile", UserID: userID},
 	})
@@ -253,16 +246,14 @@ func updateSinglePlayerStat(ctx context.Context, logger runtime.Logger, nk runti
 		json.Unmarshal([]byte(records[0].Value), &stats)
 	}
 
-	// 2. Modify the stats
 	if isWinner {
 		stats.Wins++
 		stats.Streak++
 	} else {
 		stats.Losses++
-		stats.Streak = 0 // Reset streak on loss
+		stats.Streak = 0
 	}
 
-	// 3. Write them back (PermissionRead: 2 means public can view, PermissionWrite: 0 means clients CANNOT cheat/edit)
 	bytes, _ := json.Marshal(stats)
 	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
@@ -307,7 +298,7 @@ func setActiveMatch(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 		Key:             "active_match",
 		UserID:          userID,
 		Value:           string(bytes),
-		PermissionRead:  1, // 1 = Owner can read it (Frontend), 0 = Nobody can edit it
+		PermissionRead:  1,
 		PermissionWrite: 0,
 	}})
 	logger.Info("Active match set for user: %s with matchId: %s", userID, matchID)

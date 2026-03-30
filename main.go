@@ -12,7 +12,6 @@ import (
 func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, initializer runtime.Initializer) error {
 	logger.Info("Tic-Tac-Toe Plugin Loaded Successfully!")
 
-	// 1. Initialize the Trophy Leaderboard
 	err := nk.LeaderboardCreate(ctx, "global_trophies", true, "desc", "set", "", nil)
 	if err != nil {
 		logger.Error("Failed to create global_trophies leaderboard: %v", err)
@@ -33,7 +32,6 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 		return err
 	}
 
-	// 5. Register RPCs
 	if err := initializer.RegisterRpc("get_leaderboard_with_stats", gh.GetLeaderboardWithStatsRPC); err != nil {
 		return err
 	}

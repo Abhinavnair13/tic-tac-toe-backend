@@ -7,9 +7,6 @@ import (
 	"github.com/heroiclabs/nakama-common/runtime"
 )
 
-// ==========================================
-// MOCK LOGGER (Required so AttemptMove doesn't panic)
-// ==========================================
 type MockLogger struct{}
 
 func (l *MockLogger) Debug(format string, v ...interface{})                   {}
@@ -22,9 +19,6 @@ func (l *MockLogger) Fields() map[string]interface{}                          { 
 
 var logger = &MockLogger{}
 
-// ==========================================
-// TESTS
-// ==========================================
 func TestNewGame(t *testing.T) {
 	p1, p2 := "user1", "user2"
 	game := NewGame(p1, p2, true)
@@ -43,7 +37,6 @@ func TestNewGame(t *testing.T) {
 func TestAttemptMove_Valid(t *testing.T) {
 	game := NewGame("p1", "p2", false)
 
-	// Player 1 moves to center
 	success := game.AttemptMove(logger, "p1", 4)
 	if !success {
 		t.Fatal("Valid move for P1 failed")
@@ -59,23 +52,19 @@ func TestAttemptMove_Valid(t *testing.T) {
 func TestAttemptMove_Invalid(t *testing.T) {
 	game := NewGame("p1", "p2", false)
 
-	// 1. Wrong player's turn
 	if game.AttemptMove(logger, "p2", 0) {
 		t.Error("P2 was allowed to move during P1's turn")
 	}
 
-	// 2. Out of bounds
 	if game.AttemptMove(logger, "p1", 10) {
 		t.Error("Move allowed out of bounds")
 	}
 
-	// 3. Occupied cell
 	game.AttemptMove(logger, "p1", 0)
 	if game.AttemptMove(logger, "p2", 0) {
 		t.Error("Move allowed on already occupied cell")
 	}
 
-	// 4. Move while disconnected
 	game.PlayerDisconnected("p2", time.Now().Unix())
 	if game.AttemptMove(logger, "p1", 1) {
 		t.Error("Move allowed while a player is disconnected")
@@ -111,7 +100,6 @@ func TestCheckWin(t *testing.T) {
 
 func TestCheckDraw(t *testing.T) {
 	game := NewGame("p1", "p2", false)
-	// Full board with no winner
 	game.Board = []int32{
 		1, 2, 1,
 		1, 2, 2,
@@ -126,16 +114,13 @@ func TestUpdate_DisconnectTimeout(t *testing.T) {
 	game := NewGame("p1", "p2", false)
 	now := time.Now().Unix()
 
-	// P1 disconnects
 	game.PlayerDisconnected("p1", now)
 
-	// Check 10 seconds later (no timeout)
 	changed, over := game.Update(now + 10)
 	if changed || over {
 		t.Error("Game timed out too early")
 	}
 
-	// Check 16 seconds later (timeout)
 	changed, over = game.Update(now + 16)
 	if !changed || !over {
 		t.Error("Game failed to timeout after 15s")
@@ -146,10 +131,9 @@ func TestUpdate_DisconnectTimeout(t *testing.T) {
 }
 
 func TestUpdate_TurnTimeout(t *testing.T) {
-	game := NewGame("p1", "p2", true) // Timed Mode
+	game := NewGame("p1", "p2", true)
 	start := game.TurnStartTime
 
-	// 1. Wait 31 seconds (Normal turn timeout)
 	changed, over := game.Update(start + 31)
 	if !changed || !over {
 		t.Error("Turn timer failed to trigger after 30s")
@@ -158,15 +142,11 @@ func TestUpdate_TurnTimeout(t *testing.T) {
 		t.Errorf("P1 timed out, P2 should win. Got: %s", game.WinnerID)
 	}
 
-	// 2. Ensure Turn Timer DOES NOT trigger if someone is disconnected
 	game2 := NewGame("p1", "p2", true)
 
-	// Force the turn to have started 35 seconds ago (Turn Timer Expired)
 	game2.TurnStartTime = start - 35
-	// But the player ONLY JUST disconnected (Grace Period Active)
 	game2.PlayerDisconnected("p2", start)
 
-	// Check state 5 seconds after disconnect
 	changed, over = game2.Update(start + 5)
 
 	if changed || over {
@@ -177,7 +157,6 @@ func TestUpdate_TurnTimeout(t *testing.T) {
 func TestTimeUsedTracking(t *testing.T) {
 	game := NewGame("p1", "p2", false)
 
-	// Fake the turn start to 10 seconds ago
 	game.TurnStartTime = time.Now().Unix() - 10
 	game.AttemptMove(logger, "p1", 0)
 
@@ -185,7 +164,6 @@ func TestTimeUsedTracking(t *testing.T) {
 		t.Errorf("Expected P1TimeUsed to be at least 10, got %d", game.P1TimeUsed)
 	}
 
-	// THE FIX: Declare P1 as the winner before asking for the winner's time!
 	game.WinnerID = "p1"
 
 	if game.GetWinnerTimeUsed() != game.P1TimeUsed {

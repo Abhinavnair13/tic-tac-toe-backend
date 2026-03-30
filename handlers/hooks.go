@@ -8,7 +8,6 @@ import (
 	"github.com/heroiclabs/nakama-common/runtime"
 )
 
-// AfterAuthenticateEmailHook is now a method of GameHandlers
 func (h *GameHandlers) AfterAuthenticateEmailHook(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, out *api.Session, in *api.AuthenticateEmailRequest) error {
 	if out.Created {
 		userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
@@ -18,7 +17,6 @@ func (h *GameHandlers) AfterAuthenticateEmailHook(ctx context.Context, logger ru
 
 		username, _ := ctx.Value(runtime.RUNTIME_CTX_USERNAME).(string)
 
-		// Note: We could use h.nk here, but Nakama safely injects it into the function arguments anyway!
 		_, err := nk.LeaderboardRecordWrite(ctx, "global_trophies", userID, username, 10, 0, nil, nil)
 		if err != nil {
 			logger.Error("Failed to initialize trophies: %v", err)
@@ -27,11 +25,10 @@ func (h *GameHandlers) AfterAuthenticateEmailHook(ctx context.Context, logger ru
 	return nil
 }
 
-// MatchmakerMatchedHook is now a method of GameHandlers
 func (h *GameHandlers) MatchmakerMatchedHook(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, entries []runtime.MatchmakerEntry) (string, error) {
 	if len(entries) == 2 && entries[0].GetPresence().GetUserId() == entries[1].GetPresence().GetUserId() {
 		logger.Warn("Prevented user %s from matchmaking against themselves.", entries[0].GetPresence().GetUserId())
-		return "", runtime.NewError("Cannot play against yourself", 3) // 3 = INVALID_ARGUMENT
+		return "", runtime.NewError("Cannot play against yourself", 3)
 	}
 
 	logger.Info("Matchmaker found 2 players! Spawning Authoritative Match...")
